@@ -51,4 +51,4 @@ Typical outputs are:
 - `target/jpackage/`
 - `target/native/`
 - `target/OUTPUTS.txt`
-- `src/main/resources/icons/Noxius64kDemo-1024.png`
+- `target/assets/Noxius64kDemo-1024.png`

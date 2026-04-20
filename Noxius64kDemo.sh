@@ -19,9 +19,8 @@ APP_MAC_CATEGORY="entertainment"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR="$SCRIPT_DIR"
 SRC_DIR="$PROJECT_DIR/src/main/java"
-RESOURCES_DIR="$PROJECT_DIR/src/main/resources"
-ICONS_DIR="$RESOURCES_DIR/icons"
 TARGET_DIR="$PROJECT_DIR/target"
+ASSETS_DIR="$TARGET_DIR/assets"
 CLASSES_DIR="$TARGET_DIR/classes"
 TMP_DIR="$TARGET_DIR/tmp"
 JAR_FILE="$TARGET_DIR/$APP_NAME.jar"
@@ -453,7 +452,7 @@ usage() {
 }
 
 ensure_layout() {
-  mkdir -p "$TARGET_DIR" "$TMP_DIR" "$TOOLS_DIR" "$DOWNLOAD_DIR" "$ICONS_DIR"
+  mkdir -p "$TARGET_DIR" "$ASSETS_DIR" "$TMP_DIR" "$TOOLS_DIR" "$DOWNLOAD_DIR"
 }
 
 write_output_index() {
@@ -479,8 +478,8 @@ write_output_index() {
     if [ -f "$NATIVE_DIR/$APP_NAME.exe" ]; then
       printf 'native: %s\n' "$(project_rel "$NATIVE_DIR/$APP_NAME.exe")"
     fi
-    if [ -f "$ICONS_DIR/$APP_NAME-1024.png" ]; then
-      printf 'icon: %s\n' "$(project_rel "$ICONS_DIR/$APP_NAME-1024.png")"
+    if [ -f "$ASSETS_DIR/$APP_NAME-1024.png" ]; then
+      printf 'icon: %s\n' "$(project_rel "$ASSETS_DIR/$APP_NAME-1024.png")"
     fi
   } > "$OUTPUTS_FILE"
 }
@@ -679,7 +678,7 @@ prepare_icon() {
   ensure_layout
   rm -rf "$ICON_WORK_DIR"
   mkdir -p "$ICON_WORK_DIR"
-  base_png="$ICONS_DIR/$APP_NAME-1024.png"
+  base_png="$ASSETS_DIR/$APP_NAME-1024.png"
   render_icon_png 1024 "$base_png"
   printf '%s\n' "$base_png"
 }
