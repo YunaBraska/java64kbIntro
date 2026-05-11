@@ -736,9 +736,22 @@ detect_modules() {
   "$JDEPS_BIN" --multi-release "$JAVA_RELEASE" --ignore-missing-deps --print-module-deps "$JAR_FILE"
 }
 
+jlink_compress_option() {
+  help=$("$JLINK_BIN" --help 2>&1 || true)
+  case "$help" in
+    *zip-*)
+      printf '%s\n' "--compress=zip-6"
+      ;;
+    *)
+      printf '%s\n' "--compress=2"
+      ;;
+  esac
+}
+
 build_jlink() {
   modules=$(detect_modules)
   [ -n "$modules" ] || die "jdeps did not return any modules."
+  compress_option=$(jlink_compress_option)
   rm -rf "$JLINK_DIR"
   "$JLINK_BIN" \
     --add-modules "$modules" \
@@ -746,7 +759,7 @@ build_jlink() {
     --strip-debug \
     --no-header-files \
     --no-man-pages \
-    --compress=zip-6
+    "$compress_option"
   success "Built runtime image: $(project_rel "$JLINK_DIR")"
   write_output_index
 }
