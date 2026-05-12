@@ -3,18 +3,17 @@ package berlin.yuna;
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.SourceDataLine;
-import javax.swing.JFrame;
 import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Canvas;
 import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.Frame;
 import java.awt.GradientPaint;
 import java.awt.Graphics2D;
 import java.awt.KeyboardFocusManager;
 import java.awt.RadialGradientPaint;
 import java.awt.RenderingHints;
-import java.awt.Toolkit;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
 import java.awt.event.WindowAdapter;
@@ -188,13 +187,15 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
     }
 
     public static void main(final String[] args) {
-        final JFrame frame = new JFrame("Aperture of the Black Sun");
+        final Frame frame = new Frame("Aperture of the Black Sun");
         final Noxius64kDemo demo = new Noxius64kDemo();
 
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setResizable(false);
         frame.add(demo);
         frame.pack();
+        if (Noxius64kNativeLauncher.isMacNativeImage()) {
+            frame.setSize(RENDER_W * SCALE, RENDER_H * SCALE);
+        }
         frame.setLocationRelativeTo(null);
         frame.addWindowFocusListener(new WindowAdapter() {
             @Override
@@ -210,11 +211,24 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
             @Override
             public void windowClosing(final WindowEvent event) {
                 demo.stop();
+                frame.dispose();
+                if (Noxius64kNativeLauncher.exitMacAppLoopIfNeeded()) {
+                    System.exit(0);
+                }
             }
         });
         KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(event -> {
             if (!frame.isActive()) {
                 return false;
+            }
+            if (Noxius64kNativeLauncher.isMacNativeImage()
+                    && event.getID() == KeyEvent.KEY_PRESSED
+                    && event.getKeyCode() == KeyEvent.VK_Q
+                    && (event.getModifiersEx() & KeyEvent.META_DOWN_MASK) != 0) {
+                demo.stop();
+                frame.dispose();
+                System.exit(0);
+                return true;
             }
             if (event.getID() == KeyEvent.KEY_PRESSED) {
                 demo.applyKey(event.getKeyCode(), true);
@@ -227,6 +241,11 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
         frame.setVisible(true);
         demo.requestFocusInWindow();
         demo.start();
+        if (Noxius64kNativeLauncher.enterMacAppLoopIfNeeded()) {
+            demo.stop();
+            frame.dispose();
+            System.exit(0);
+        }
     }
 
     private boolean start() {
@@ -236,10 +255,15 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
         startNanos = System.nanoTime();
         final Thread loop = new Thread(this, "noxius-demo-loop");
         loop.start();
+        startAudio();
+        return true;
+    }
+
+    private Thread startAudio() {
         final Thread audio = new Thread(this::runAudio, "noxius-demo-audio");
         audio.setDaemon(true);
         audio.start();
-        return true;
+        return audio;
     }
 
     private boolean stop() {
@@ -344,7 +368,6 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
                 }
             } while (strategy.contentsRestored());
             strategy.show();
-            Toolkit.getDefaultToolkit().sync();
         } while (strategy.contentsLost());
     }
 

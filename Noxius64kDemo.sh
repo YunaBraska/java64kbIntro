@@ -19,6 +19,8 @@ APP_MAC_CATEGORY="entertainment"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR="$SCRIPT_DIR"
 SRC_DIR="$PROJECT_DIR/src/main/java"
+NATIVE_IMAGE_SUPPORT_DIR="$PROJECT_DIR/src/native-image/java"
+NATIVE_IMAGE_C_DIR="$PROJECT_DIR/src/native-image/c"
 TARGET_DIR="$PROJECT_DIR/target"
 ASSETS_DIR="$TARGET_DIR/assets"
 CLASSES_DIR="$TARGET_DIR/classes"
@@ -379,7 +381,7 @@ prompt_action() {
   say "  ${COLOR_BOLD}1${COLOR_RESET}) Doctor"
   say "  ${COLOR_BOLD}2${COLOR_RESET}) Run jar"
   say "  ${COLOR_BOLD}3${COLOR_RESET}) Build jpackage app-image"
-  say "  ${COLOR_BOLD}4${COLOR_RESET}) Build GraalVM native executable"
+  say "  ${COLOR_BOLD}4${COLOR_RESET}) Build native artifact"
   say "  ${COLOR_BOLD}q${COLOR_RESET}) Quit"
   printf '> '
   IFS= read -r choice
@@ -441,14 +443,13 @@ usage() {
   say "  ${COLOR_BOLD}doctor${COLOR_RESET}    Print host OS, arch, shell compatibility, chosen download URLs, and current tool paths."
   say "  ${COLOR_BOLD}run${COLOR_RESET}       Compile with --release $JAVA_RELEASE, build $(project_rel "$JAR_FILE"), and run it."
   say "  ${COLOR_BOLD}jpackage${COLOR_RESET}  Compile, detect modules with jdeps, build jlink, then build jpackage output."
-  say "  ${COLOR_BOLD}native${COLOR_RESET}    Compile, build the jar, then attempt a GraalVM native-image build."
+  say "  ${COLOR_BOLD}native${COLOR_RESET}    Compile, build the jar, then build the native host artifact."
   say ""
   say "Notes:"
   say "  - Plain Java tools only. Maven is not involved."
   say "  - If no usable JDK >= $REQUIRED_JAVA exists, the script downloads Eclipse Temurin JDK $LATEST_LTS_JAVA into $(project_rel "$TOOLS_DIR")."
   say "  - The script requires and targets Java $JAVA_RELEASE."
-  say "  - GraalVM native builds for AWT/Swing remain best-effort."
-  say "  - Build outputs are host-platform artifacts. Run the script on each target OS."
+  say "  - Native outputs are host-platform artifacts. Run the script on each target OS."
 }
 
 ensure_layout() {
@@ -471,6 +472,9 @@ write_output_index() {
       find "$JPACKAGE_DIR" -maxdepth 2 \( -name '*.app' -o -name '*.dmg' -o -name '*.pkg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.msi' -o -name '*.exe' -o -name "$APP_NAME" \) | sort | while IFS= read -r path; do
         [ -n "$path" ] && printf 'jpackage: %s\n' "$(project_rel "$path")"
       done
+    fi
+    if [ -d "$NATIVE_DIR/$APP_NAME.app" ]; then
+      printf 'native: %s\n' "$(project_rel "$NATIVE_DIR/$APP_NAME.app")"
     fi
     if [ -f "$NATIVE_DIR/$APP_NAME" ]; then
       printf 'native: %s\n' "$(project_rel "$NATIVE_DIR/$APP_NAME")"
@@ -764,7 +768,7 @@ build_jlink() {
   write_output_index
 }
 
-build_jpackage() {
+build_jpackage_output() {
   build_jar
   build_jlink
   icon_file=$(prepare_icon)
@@ -822,6 +826,10 @@ build_jpackage() {
       ;;
   esac
   success "Built jpackage output in: $(project_rel "$JPACKAGE_DIR")"
+}
+
+build_jpackage() {
+  build_jpackage_output
   write_output_index
   show_outputs
 }
@@ -879,7 +887,289 @@ ensure_graalvm() {
   NATIVE_IMAGE_BIN=$(tool_path_in_home "$GRAALVM_HOME" native-image || die "native-image tool missing under $GRAALVM_HOME")
 }
 
+macos_static_platform() {
+  case "$(host_arch)" in
+    aarch64) printf '%s\n' "darwin-aarch64" ;;
+    x64) printf '%s\n' "darwin-amd64" ;;
+    *) die "Unsupported macOS CPU architecture for native-image: $(host_arch)" ;;
+  esac
+}
+
+macos_awt_static_libraries() {
+  printf '%s\n' \
+    libawt.a \
+    libawt_lwawt.a \
+    libfontmanager.a \
+    libfreetype.a \
+    libjavajpeg.a \
+    liblcms.a \
+    libmlib_image.a \
+    libjsound.a \
+    libosxapp.a \
+    libosxui.a
+}
+
+macos_awt_frameworks() {
+  printf '%s\n' \
+    Accelerate \
+    AppKit \
+    ApplicationServices \
+    AudioToolbox \
+    AudioUnit \
+    Carbon \
+    Cocoa \
+    CoreAudio \
+    CoreFoundation \
+    CoreGraphics \
+    CoreMIDI \
+    CoreServices \
+    CoreText \
+    CoreVideo \
+    ExceptionHandling \
+    Foundation \
+    ImageIO \
+    IOSurface \
+    JavaRuntimeSupport \
+    Metal \
+    OpenGL \
+    QuartzCore \
+    Security \
+    SystemConfiguration
+}
+
+build_macos_native_feature() {
+  support_tmp="$TMP_DIR/native-image-support"
+  support_classes="$support_tmp/classes"
+  support_sources="$support_tmp/sources.txt"
+  support_javac_log="$support_tmp/javac.log"
+  feature_jar="$support_tmp/darwin-awt-feature.jar"
+  graal_javac=$(tool_path_in_home "$GRAALVM_HOME" javac || die "javac tool missing under $GRAALVM_HOME")
+  graal_jar=$(tool_path_in_home "$GRAALVM_HOME" jar || die "jar tool missing under $GRAALVM_HOME")
+
+  [ -d "$NATIVE_IMAGE_SUPPORT_DIR" ] || die "Missing native-image support sources: $(project_rel "$NATIVE_IMAGE_SUPPORT_DIR")"
+  rm -rf "$support_tmp"
+  mkdir -p "$support_classes"
+  find "$NATIVE_IMAGE_SUPPORT_DIR" -name '*.java' | sort > "$support_sources"
+  [ -s "$support_sources" ] || die "No native-image support sources found under $(project_rel "$NATIVE_IMAGE_SUPPORT_DIR")"
+
+  if ! "$graal_javac" \
+    -nowarn \
+    -Xlint:none \
+    --module-path "$GRAALVM_HOME/jmods:$GRAALVM_HOME/lib/svm/builder" \
+    --add-modules org.graalvm.nativeimage.builder \
+    --patch-module org.graalvm.nativeimage.builder="$NATIVE_IMAGE_SUPPORT_DIR" \
+    --add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.annotate=ALL-UNNAMED \
+    --add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.feature=ALL-UNNAMED \
+    --add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.jdk=ALL-UNNAMED \
+    --add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.posix=ALL-UNNAMED \
+    --add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.posix.headers=ALL-UNNAMED \
+    --add-exports org.graalvm.nativeimage.builder/com.oracle.svm.core.util=ALL-UNNAMED \
+    -d "$support_classes" \
+    @"$support_sources" \
+    2> "$support_javac_log"; then
+    sed -n '1,120p' "$support_javac_log" >&2
+    die "Could not compile macOS native-image support."
+  fi
+  "$graal_jar" --create --file "$feature_jar" -C "$support_classes" .
+  printf '%s\n' "$feature_jar"
+}
+
+build_macos_native_objects() {
+  support_tmp=$1
+  native_object="$support_tmp/NoxiusMacAppKit.o"
+  clang_bin=${CC:-}
+  sdk_path=""
+
+  [ -d "$NATIVE_IMAGE_C_DIR" ] || die "Missing native-image C sources: $(project_rel "$NATIVE_IMAGE_C_DIR")"
+  if [ -z "$clang_bin" ]; then
+    if have_cmd xcrun; then
+      clang_bin=$(xcrun --find clang)
+    elif have_cmd clang; then
+      clang_bin=clang
+    else
+      die "Could not find clang for macOS native AppKit support."
+    fi
+  fi
+  if have_cmd xcrun; then
+    sdk_path=$(xcrun --show-sdk-path)
+  fi
+
+  if [ -n "$sdk_path" ]; then
+    "$clang_bin" \
+      -fobjc-arc \
+      -fmodules \
+      -isysroot "$sdk_path" \
+      -I"$GRAALVM_HOME/include" \
+      -I"$GRAALVM_HOME/include/darwin" \
+      -c "$NATIVE_IMAGE_C_DIR/NoxiusMacAppKit.m" \
+      -o "$native_object"
+  else
+    "$clang_bin" \
+      -fobjc-arc \
+      -fmodules \
+      -I"$GRAALVM_HOME/include" \
+      -I"$GRAALVM_HOME/include/darwin" \
+      -c "$NATIVE_IMAGE_C_DIR/NoxiusMacAppKit.m" \
+      -o "$native_object"
+  fi
+  printf '%s\n' "$native_object"
+}
+
+build_macos_native_app_bundle() {
+  executable_path=$1
+  shader_source=$2
+  app_bundle="$NATIVE_DIR/$APP_NAME.app"
+  contents_dir="$app_bundle/Contents"
+  macos_dir="$contents_dir/MacOS"
+  resources_dir="$contents_dir/Resources"
+  icon_file=$(prepare_icon)
+
+  rm -rf "$app_bundle"
+  mkdir -p "$macos_dir/lib" "$resources_dir"
+  mv "$executable_path" "$macos_dir/$APP_NAME"
+  cp "$shader_source" "$macos_dir/lib/shaders.metallib"
+  cat > "$contents_dir/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>$APP_NAME</string>
+  <key>CFBundleIdentifier</key>
+  <string>$APP_MAC_ID</string>
+  <key>CFBundleName</key>
+  <string>$APP_MAC_NAME</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0.0</string>
+  <key>CFBundleVersion</key>
+  <string>1.0.0</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.$APP_MAC_CATEGORY</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+EOF
+  apply_macos_bundle_icon "$icon_file" "$app_bundle"
+  printf '%s\n' "$app_bundle"
+}
+
+write_macos_keep_symbols() {
+  static_dir=$1
+  archives_file=$2
+  all_symbols=$3
+  keep_symbols=$4
+
+  : > "$all_symbols"
+  while IFS= read -r archive; do
+    nm -gU "$archive" | awk '/ [T] _/ && $3 ~ /^_(Java_|JNI_OnLoad|JNI_OnUnload)/ { print $3 }' >> "$all_symbols"
+  done < "$archives_file"
+  sort -u "$all_symbols" > "$all_symbols.tmp"
+  mv "$all_symbols.tmp" "$all_symbols"
+  {
+    cat "$all_symbols"
+    printf '%s\n' \
+      _JVM_IsStaticallyLinked \
+      _jio_fprintf \
+      _jio_snprintf \
+      _JNU_CallMethodByName \
+      _JNU_CallStaticMethodByName \
+      _JNU_GetEnv \
+      _JNU_GetStaticFieldByName \
+      _JNU_GetStringPlatformChars \
+      _JNU_IsInstanceOfByName \
+      _JNU_NewObjectByName \
+      _JNU_NewStringPlatform \
+      _JNU_ReleaseStringPlatformChars \
+      _JNU_SetFieldByName \
+      _JNU_ThrowArrayIndexOutOfBoundsException \
+      _JNU_ThrowByName \
+      _JNU_ThrowIllegalArgumentException \
+      _JNU_ThrowInternalError \
+      _JNU_ThrowIOException \
+      _JNU_ThrowNullPointerException \
+      _JNU_ThrowOutOfMemoryError \
+      _Java_berlin_yuna_Noxius64kNativeLauncher_runMacAppLoop \
+      _Java_berlin_yuna_Noxius64kNativeLauncher_stopMacAppLoop
+  } | sort -u > "$keep_symbols"
+  [ -s "$keep_symbols" ] || die "Could not derive macOS AWT native symbols from $static_dir"
+}
+
+build_native_macos() {
+  build_jar
+  ensure_graalvm
+  rm -rf "$NATIVE_DIR"
+  mkdir -p "$NATIVE_DIR"
+  native_tmp="$NATIVE_DIR/tmp"
+  native_output="$APP_NAME"
+  support_tmp="$TMP_DIR/native-image-support"
+  archives_file="$support_tmp/darwin-awt-archives.txt"
+  symbols_all="$support_tmp/darwin-awt-symbols.txt"
+  symbols_keep="$support_tmp/darwin-awt-keep-symbols.txt"
+  static_dir="$GRAALVM_HOME/lib/static/$(macos_static_platform)"
+  shader_source="$GRAALVM_HOME/lib/shaders.metallib"
+
+  [ -d "$static_dir" ] || die "Missing GraalVM static libraries: $static_dir"
+  [ -f "$shader_source" ] || die "Missing GraalVM Metal shader library: $shader_source"
+  mkdir -p "$native_tmp" "$support_tmp"
+  feature_jar=$(build_macos_native_feature)
+  native_object=$(build_macos_native_objects "$support_tmp")
+
+  set -- "$NATIVE_IMAGE_BIN" \
+    -J-Djava.io.tmpdir="$native_tmp" \
+    "-J--patch-module=org.graalvm.nativeimage.builder=$feature_jar" \
+    --features=com.oracle.svm.hosted.jdk.NoxiusDarwinAwtFeature \
+    --silent \
+    --no-fallback \
+    -Os \
+    -march=compatibility \
+    -cp "$JAR_FILE" \
+    "-H:NativeLinkerOption=$native_object" \
+    -o "$native_output"
+
+  : > "$archives_file"
+  for lib in $(macos_awt_static_libraries); do
+    archive="$static_dir/$lib"
+    [ -f "$archive" ] || die "Missing GraalVM static library: $archive"
+    printf '%s\n' "$archive" >> "$archives_file"
+    set -- "$@" "-H:NativeLinkerOption=-Wl,-force_load,$archive"
+  done
+  for framework in $(macos_awt_frameworks); do
+    set -- "$@" "-H:NativeLinkerOption=-Wl,-framework,$framework"
+  done
+  for option in -lobjc -lc++ -lcups -lz; do
+    set -- "$@" "-H:NativeLinkerOption=$option"
+  done
+
+  write_macos_keep_symbols "$static_dir" "$archives_file" "$symbols_all" "$symbols_keep"
+  while IFS= read -r symbol; do
+    set -- "$@" "-H:NativeLinkerOption=-Wl,-u,$symbol" "-H:NativeLinkerOption=-Wl,-exported_symbol,$symbol"
+  done < "$symbols_keep"
+
+  info "Building macOS native executable with bundled AWT support."
+  (
+    cd "$NATIVE_DIR"
+    TMPDIR="$native_tmp" \
+    TMP="$native_tmp" \
+    TEMP="$native_tmp" \
+      "$@" berlin.yuna.Noxius64kNativeLauncher
+  )
+  native_app=$(build_macos_native_app_bundle "$NATIVE_DIR/$native_output" "$shader_source")
+  success "Built native app in: $(project_rel "$native_app")"
+  write_output_index
+  show_outputs
+}
+
 build_native() {
+  if [ "$(host_os)" = "mac" ]; then
+    build_native_macos
+    return 0
+  fi
+
   build_jar
   ensure_graalvm
   rm -rf "$NATIVE_DIR"
@@ -887,7 +1177,7 @@ build_native() {
   native_tmp="$NATIVE_DIR/tmp"
   native_output="$APP_NAME$(native_binary_suffix)"
   mkdir -p "$native_tmp"
-  warn "Native build note: GraalVM documents that AWT/Swing apps may need reachability metadata."
+  info "Building native executable with GraalVM native-image."
   (
     cd "$NATIVE_DIR"
     TMPDIR="$native_tmp" \
@@ -895,6 +1185,7 @@ build_native() {
     TEMP="$native_tmp" \
       "$NATIVE_IMAGE_BIN" \
       -J-Djava.io.tmpdir="$native_tmp" \
+      --silent \
       --no-fallback \
       -Os \
       -march=compatibility \
