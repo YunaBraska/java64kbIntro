@@ -6,7 +6,7 @@ RUN set -eu; \
     url=${AMD64}; \
     if [ "$(uname -m)" = aarch64 ]; then url=${ARM64}; fi; \
     apt-get update; \
-    apt-get install -y --no-install-recommends build-essential curl locales locales-all zlib1g-dev; \
+    apt-get install -y --no-install-recommends build-essential ca-certificates curl locales locales-all zlib1g-dev; \
     mkdir -p "${GRAALVM_HOME}"; \
     curl -fsSL "${url}" -o /tmp/graalvm.tar.gz; \
     tar -xzf /tmp/graalvm.tar.gz -C "${GRAALVM_HOME}" --strip-components=1; \
