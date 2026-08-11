@@ -161,7 +161,7 @@
                             <mainClass>berlin.yuna.Noxius64kDemo</mainClass>
                             <buildArgs>
                                 <buildArg>--no-fallback</buildArg>
-                                <buildArg>-Os</buildArg>
+                                <buildArg>-O1</buildArg>
                                 <buildArg>-march=compatibility</buildArg>
                             </buildArgs>
                         </configuration>
