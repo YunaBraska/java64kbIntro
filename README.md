@@ -39,7 +39,8 @@ On Windows, you can use `Noxius64kDemo.cmd`. It looks for `sh.exe` from Git Bash
 
 ## Maven
 
-`pom.xml` is intentionally minimal and exists mainly so IDEs understand the Java level and source layout. The build script does the real work. Maven is there for editor convenience, not because the project needs a ceremony stack to compile one Java demo.
+The build script remains the local build and packaging entrypoint. Maven is the CI and publishing bridge: it produces the
+versioned JAR, sources, Javadoc, and native release assets without replacing the script's `jlink` and `jpackage` flow.
 
 ## Output locations
 
