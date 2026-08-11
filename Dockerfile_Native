@@ -1,0 +1,27 @@
+FROM debian:bookworm-slim AS graalvm
+ENV GRAALVM_HOME=/usr/local/graalvm
+ENV AMD64=https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-17.0.9/graalvm-community-jdk-17.0.9_linux-x64_bin.tar.gz
+ENV ARM64=https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-17.0.9/graalvm-community-jdk-17.0.9_linux-aarch64_bin.tar.gz
+RUN set -eu; \
+    url=${AMD64}; \
+    if [ "$(uname -m)" = aarch64 ]; then url=${ARM64}; fi; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends build-essential curl locales locales-all zlib1g-dev; \
+    mkdir -p "${GRAALVM_HOME}"; \
+    curl -fsSL "${url}" -o /tmp/graalvm.tar.gz; \
+    tar -xzf /tmp/graalvm.tar.gz -C "${GRAALVM_HOME}" --strip-components=1; \
+    rm -f /tmp/graalvm.tar.gz; \
+    rm -rf /var/lib/apt/lists/*
+
+FROM graalvm AS build
+ENV JAVA_HOME=/usr/local/graalvm
+ENV LC_ALL=en_US.UTF-8
+ENV LANG=en_US.UTF-8
+WORKDIR /workspace
+COPY .mvn .mvn
+COPY mvnw pom.xml ./
+COPY src src
+RUN chmod +x mvnw && ./mvnw -B -Pnative -DskipTests package
+
+FROM scratch AS export
+COPY --from=build /workspace/target/noxius-64k-demo.native /app.native
