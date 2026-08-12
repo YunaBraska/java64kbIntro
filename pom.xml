@@ -10,6 +10,7 @@
     <packaging>jar</packaging>
 
     <name>Noxius64kDemo</name>
+    <description>Plain-Java audiovisual demo inspired by demoscene 64k intros.</description>
     <url>https://github.com/YunaBraska/java64kbIntro</url>
 
     <scm>
