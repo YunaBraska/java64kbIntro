@@ -1,7 +1,7 @@
 FROM debian:bookworm-slim AS graalvm
 ENV GRAALVM_HOME=/usr/local/graalvm
-ENV AMD64=https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-17.0.9/graalvm-community-jdk-17.0.9_linux-x64_bin.tar.gz
-ENV ARM64=https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-17.0.9/graalvm-community-jdk-17.0.9_linux-aarch64_bin.tar.gz
+ENV AMD64=https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-25.0.2/graalvm-community-jdk-25.0.2_linux-x64_bin.tar.gz
+ENV ARM64=https://github.com/graalvm/graalvm-ce-builds/releases/download/jdk-25.0.2/graalvm-community-jdk-25.0.2_linux-aarch64_bin.tar.gz
 RUN set -eu; \
     url=${AMD64}; \
     if [ "$(uname -m)" = aarch64 ]; then url=${ARM64}; fi; \
