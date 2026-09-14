@@ -26,6 +26,8 @@ sh ./Noxius64kDemo.sh jpackage
 sh ./Noxius64kDemo.sh native
 ```
 
+While it runs, use `WASD` or the arrow keys to steer the camera, tap `Space` or `Enter` on the beat to send a pulse through the scene and soundtrack, and hold `Shift` to sustain the interaction energy.
+
 The script:
 
 - requires and targets Java 17 only
