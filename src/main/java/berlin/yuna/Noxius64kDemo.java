@@ -25,6 +25,7 @@ import java.awt.image.BufferedImage;
 import java.awt.image.BufferStrategy;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 
 public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener {
 
@@ -70,12 +71,6 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
             {0, 0, 0, -12, 7, 0, 10, 0, 3, 0, -5, 0, 5, 7, 10, 12},
             {0, -12, 0, 7, 0, 10, 7, 5, 0, 3, -2, 0, -5, 0, 7, 10}
     };
-    private static final int[][] LEAD_PATTERNS = {
-            {12, 15, 19, 22, 24, 22, 19, 15, 12, 17, 20, 24, 27, 24, 20, 17},
-            {12, 19, 22, 24, 27, 31, 29, 24, 22, 19, 15, 17, 22, 24, 27, 22},
-            {15, 19, 24, 27, 31, 27, 24, 22, 19, 22, 27, 29, 31, 34, 31, 27},
-            {12, 14, 19, 21, 26, 24, 21, 19, 17, 19, 24, 26, 29, 31, 29, 24}
-    };
     private static final int[][] VISUAL_ORDERS = {
             {BIRTH, FLUID, CORRIDOR, MACHINE, WORLD, TRANSFORM, ASCEND},
             {FLUID, SPACE, WORLD, CITY, MACHINE, TRANSFORM, ASCEND},
@@ -103,19 +98,9 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
             {0x0101, 0x1110, 0x5111, 0x5955, 0x5151, 0x1010, 0x5D55},
             {0x0000, 0x1101, 0x1515, 0xD155, 0x5515, 0x1100, 0xD555}
     };
-    private static final int[][] SNARE_BANKS = {
-            {0x0000, 0x1010, 0x1810, 0x5850, 0x1010, 0x1000, 0x5850},
-            {0x0000, 0x1000, 0x1818, 0x5890, 0x1810, 0x0000, 0x58D0},
-            {0x0000, 0x0010, 0x1018, 0x5858, 0x1010, 0x1010, 0xD858},
-            {0x0000, 0x1010, 0x5010, 0xD050, 0x1818, 0x1000, 0xD0D0}
-    };
-    private static final int[][] HAT_BANKS = {
-            {0x0000, 0x2222, 0xAAAA, 0xEEEE, 0xAAEA, 0x2022, 0xFEFE},
-            {0x0000, 0x0202, 0x8A8A, 0xAEAE, 0xA2EA, 0x0200, 0xFAEA},
-            {0x0000, 0x2020, 0xAAAA, 0xEAEA, 0xAAAA, 0x2002, 0xEEEE},
-            {0x0000, 0x2220, 0xA2AA, 0xFEAE, 0xEA2A, 0x0020, 0xFAFE}
-    };
     private static final Color BLACK = new Color(0, 0, 0);
+    private static final BasicStroke REFORM_STROKE = new BasicStroke(1.0f);
+    private static final BasicStroke REFORM_GLOW_STROKE = new BasicStroke(3.0f);
 
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicBoolean[] keys = new AtomicBoolean[768];
@@ -131,9 +116,6 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
     private final double beatSeconds;
     private final double introStretch;
     private final double cycleBeats;
-    private final int harmonyVariant;
-    private final int bassVariant;
-    private final int leadVariant;
     private final int openingVariant;
     private final int cameraVariant;
     private final int sequenceVariant;
@@ -141,7 +123,6 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
     private final int grooveVariant;
     private final int beatShift;
     private final int backdropVariant;
-    private final int kitVariant;
     private long startNanos;
     private double time;
     private double nudgeX;
@@ -158,9 +139,6 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
         rootNote = 29 + (int) (hash01(seed ^ 0x51A7E11AL) * 9.0);
         beatSeconds = 60.0 / bpm;
         introStretch = 0.78 + hash01(seed ^ 0xB11D5EEDL) * 0.62;
-        harmonyVariant = (int) (hash01(seed ^ 0xCAFE1234L) * PROGRESSIONS.length);
-        bassVariant = (int) (hash01(seed ^ 0xB4551234L) * BASS_PATTERNS.length);
-        leadVariant = (int) (hash01(seed ^ 0x1EAD1234L) * LEAD_PATTERNS.length);
         openingVariant = (int) (hash01(seed ^ 0x0F3A9E21L) * 3.0);
         cameraVariant = (int) (hash01(seed ^ 0x7A6C01DEL) * 4.0);
         sequenceVariant = (int) (hash01(seed ^ 0x5C3E3A11L) * VISUAL_ORDERS.length);
@@ -168,7 +146,6 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
         grooveVariant = (int) (hash01(seed ^ 0x6000F00DL) * KICK_BANKS.length);
         beatShift = (int) (hash01(seed ^ 0xB3A7516EL) * 4.0) * 2;
         backdropVariant = (int) (hash01(seed ^ 0xBACD10FFL) * 7.0);
-        kitVariant = (int) (hash01(seed ^ 0xD20D20D2L) * 4.0);
         cycleBeats = computeCycleBeats();
 
         setPreferredSize(new Dimension(RENDER_W * SCALE, RENDER_H * SCALE));
@@ -248,10 +225,11 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
 
     @Override
     public void run() {
-        createBufferStrategy(2);
+        createBufferStrategy(3);
         final BufferStrategy strategy = getBufferStrategy();
-        final double nanosPerTick = 1_000_000_000.0 / TPS;
+        final long nanosPerTick = (long) (1_000_000_000.0 / TPS);
         long previous = System.nanoTime();
+        long nextFrame = previous;
         double lag = 0.0;
 
         while (running.get()) {
@@ -262,12 +240,17 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
                 update(1.0 / TPS);
                 lag -= nanosPerTick;
             }
+            if (now < nextFrame) {
+                LockSupport.parkNanos(nextFrame - now);
+                if (Thread.interrupted()) {
+                    running.set(false);
+                }
+                continue;
+            }
             render(strategy);
-            try {
-                Thread.sleep(1L);
-            } catch (final InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-                running.set(false);
+            nextFrame += nanosPerTick;
+            if (nextFrame < now - nanosPerTick) {
+                nextFrame = now + nanosPerTick;
             }
         }
     }
@@ -313,23 +296,9 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
 
     private void render(final BufferStrategy strategy) {
         final Signals signals = signalsAt(time);
-        final Camera camera = cameraAt(signals);
+        final Camera camera = transitionCamera(signals);
         final Palette palette = paletteAt(signals);
-        final Graphics2D g = scene.createGraphics();
-        final Graphics2D fx = glow.createGraphics();
-        try {
-            configure(g);
-            configure(fx);
-            clearBuffers(g, fx, palette);
-            drawBackground(g, fx, signals, palette);
-            drawSection(g, fx, signals, camera, palette);
-            drawParticles(g, fx, signals, camera, palette);
-            drawInteractionPulses(g, fx, signals, camera, palette);
-            drawAtmosphere(g, fx, signals, palette);
-        } finally {
-            g.dispose();
-            fx.dispose();
-        }
+        renderLayer(signals, camera, palette, reformAmount(signals));
 
         do {
             do {
@@ -346,6 +315,102 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
             strategy.show();
             Toolkit.getDefaultToolkit().sync();
         } while (strategy.contentsLost());
+    }
+
+    private Camera transitionCamera(final Signals signals) {
+        final Camera current = cameraAt(signals);
+        if (signals.sectionBlend <= 0.0) {
+            return current;
+        }
+        final double remainingBeats = (1.0 - signals.sectionProgress) * sectionBeatLength(signals.section);
+        final Signals nextSignals = signalsAt(time + remainingBeats * beatSeconds + 0.000001);
+        final Camera next = cameraAt(nextSignals);
+        final double blend = signals.sectionBlend;
+        final Vec3 forward = current.forward.mix(next.forward, blend).normalize();
+        final Vec3 upHint = current.up.mix(next.up, blend).normalize();
+        Vec3 right = forward.cross(upHint).normalize();
+        if (right.length() < 0.001) {
+            right = current.right.mix(next.right, blend).normalize();
+        }
+        final Vec3 up = right.cross(forward).normalize();
+        return new Camera(current.position.mix(next.position, blend),
+                right, up, forward,
+                current.roll + (next.roll - current.roll) * blend,
+                current.focal + (next.focal - current.focal) * blend,
+                current.centerY + (next.centerY - current.centerY) * blend);
+    }
+
+    private void renderLayer(final Signals signals, final Camera camera, final Palette palette, final double reform) {
+        final Graphics2D g = scene.createGraphics();
+        final Graphics2D fx = glow.createGraphics();
+        try {
+            configure(g);
+            configure(fx);
+            clearBuffers(g, fx, palette);
+            if (reform > 0.001) {
+                final var gTransform = g.getTransform();
+                final var fxTransform = fx.getTransform();
+                final var gComposite = g.getComposite();
+                final var fxComposite = fx.getComposite();
+                final double scale = 1.0 - reform * 0.72;
+                final double direction = signals.sectionProgress < 0.5 ? -1.0 : 1.0;
+                g.translate(RENDER_W * 0.5, RENDER_H * 0.5);
+                fx.translate(RENDER_W * 0.5, RENDER_H * 0.5);
+                g.rotate(direction * reform * 0.10);
+                fx.rotate(direction * reform * 0.10);
+                g.scale(scale, scale);
+                fx.scale(scale, scale);
+                g.translate(-RENDER_W * 0.5, -RENDER_H * 0.5);
+                fx.translate(-RENDER_W * 0.5, -RENDER_H * 0.5);
+                g.setComposite(AlphaComposite.SrcOver.derive((float) (1.0 - reform)));
+                fx.setComposite(AlphaComposite.SrcOver.derive((float) (1.0 - reform)));
+                drawBackground(g, fx, signals, palette);
+                drawSection(g, fx, signals, camera, palette);
+                g.setTransform(gTransform);
+                fx.setTransform(fxTransform);
+                g.setComposite(gComposite);
+                fx.setComposite(fxComposite);
+                drawReformCore(g, fx, signals, palette, reform);
+            } else {
+                drawBackground(g, fx, signals, palette);
+                drawSection(g, fx, signals, camera, palette);
+            }
+            drawParticles(g, fx, signals, camera, palette);
+            drawInteractionPulses(g, fx, signals, camera, palette);
+            drawAtmosphere(g, fx, signals, palette);
+        } finally {
+            g.dispose();
+            fx.dispose();
+        }
+    }
+
+    private static double reformAmount(final Signals signals) {
+        final double entry = 1.0 - smoothstep(0.0, 0.05, signals.sectionProgress);
+        final double exit = smoothstep(0.95, 1.0, signals.sectionProgress);
+        return Math.max(entry, exit);
+    }
+
+    private void drawReformCore(final Graphics2D g, final Graphics2D fx, final Signals s,
+                                final Palette p, final double reform) {
+        final double alpha = smoothstep(0.12, 1.0, reform);
+        final int cx = RENDER_W / 2;
+        final int cy = RENDER_H / 2;
+        final int radius = (int) (22.0 + reform * 68.0 + s.beatPulse * 8.0);
+        g.setStroke(REFORM_STROKE);
+        fx.setStroke(REFORM_GLOW_STROKE);
+        for (int i = 0; i < 4; i++) {
+            final int r = radius + i * 15;
+            g.setColor(withAlpha(i == 0 ? p.core : p.edge, alpha * (0.34 - i * 0.055)));
+            g.drawOval(cx - r, cy - r, r * 2, r * 2);
+            fx.setColor(withAlpha(p.glow, alpha * (0.11 - i * 0.016)));
+            fx.drawOval(cx - r - 2, cy - r - 2, r * 2 + 4, r * 2 + 4);
+        }
+        for (int i = 0; i < 8; i++) {
+            final double angle = i * Math.PI * 0.25 + time * 0.18;
+            final int x = cx + (int) (Math.cos(angle) * radius * 1.65);
+            final int y = cy + (int) (Math.sin(angle) * radius * 0.72);
+            drawLine2(g, fx, cx, cy, x, y, p.glow, alpha * 0.20, 1.0);
+        }
     }
 
     private void configure(final Graphics2D g) {
@@ -456,12 +521,6 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
             case ORGANIC -> drawOrganic(g, fx, s, camera, p);
             case GEARS -> drawGears(g, fx, s, camera, p);
             default -> drawAscension(g, fx, s, camera, p);
-        }
-        if (s.sectionBlend > 0.0) {
-            g.setColor(withAlpha(p.glow, s.sectionBlend * 0.05));
-            g.fillRect(0, 0, RENDER_W, RENDER_H);
-            fx.setColor(withAlpha(p.glow, s.sectionBlend * 0.10));
-            fx.fillOval(RENDER_W / 2 - 240, RENDER_H / 2 - 240, 480, 480);
         }
     }
 
@@ -873,19 +932,13 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
     }
 
     private void drawPost(final Graphics2D out, final Signals s) {
-        final double bloom = 0.20 + s.intensity * 0.22 + s.low * 0.16 + interactionEnergy * 0.018;
+        final double bloom = 0.14 + s.intensity * 0.16 + s.low * 0.10 + interactionEnergy * 0.012;
         out.setComposite(AlphaComposite.SrcOver.derive(1.0f));
         out.drawImage(scene, 0, 0, null);
-        out.setComposite(AlphaComposite.SrcOver.derive((float) clamp(bloom * 0.36, 0.0, 0.55)));
-        out.drawImage(glow, -2, 0, RENDER_W + 4, RENDER_H, null);
-        out.drawImage(glow, 2, 0, RENDER_W - 4, RENDER_H, null);
-        out.setComposite(AlphaComposite.SrcOver.derive((float) clamp(bloom * 0.42, 0.0, 0.62)));
-        out.drawImage(glow, -6, -4, RENDER_W + 12, RENDER_H + 8, null);
-        out.setComposite(AlphaComposite.SrcOver.derive((float) clamp(0.08 + s.high * 0.10 + interactionEnergy * 0.012, 0.0, 0.28)));
-        out.setColor(new Color(255, 40, 70));
-        out.drawImage(glow, -3, 0, null);
-        out.setColor(new Color(40, 240, 255));
-        out.drawImage(glow, 3, 0, null);
+        out.setComposite(AlphaComposite.SrcOver.derive((float) clamp(bloom * 0.28, 0.0, 0.34)));
+        out.drawImage(glow, -2, -2, RENDER_W + 4, RENDER_H + 4, null);
+        out.setComposite(AlphaComposite.SrcOver.derive((float) clamp(bloom * 0.18, 0.0, 0.24)));
+        out.drawImage(glow, -7, -5, RENDER_W + 14, RENDER_H + 10, null);
         out.setComposite(AlphaComposite.SrcOver);
 
         final Point2D center = new Point2D.Double(RENDER_W * 0.5, RENDER_H * 0.52);
@@ -1245,7 +1298,7 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
     private Palette paletteAt(final Signals s) {
         final Palette a = palette(visualFamily(s.section));
         final Palette b = palette(visualFamily((s.section + 1) % SECTIONS));
-        final double blend = s.sectionBlend * 0.78;
+        final double blend = s.sectionBlend;
         return new Palette(
                 mix(a.skyTop, b.skyTop, blend),
                 mix(a.skyBottom, b.skyBottom, blend),
@@ -1365,14 +1418,44 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
             line.open(format, 16_384);
             line.start();
             final byte[] buffer = new byte[4_096];
+            final double[] delayLeft = new double[SAMPLE_RATE * 3 / 20];
+            final double[] delayRight = new double[SAMPLE_RATE * 11 / 50];
+            int delayLeftCursor = 0;
+            int delayRightCursor = 0;
+            double control = 0.0;
+            double peakEnvelope = 0.0;
             long sample = 0L;
             while (running.get()) {
+                final double controlTarget = Double.longBitsToDouble(interactionBits.get());
                 for (int i = 0; i < buffer.length; i += 4) {
                     final double t = sample / (double) SAMPLE_RATE;
-                    final double control = Double.longBitsToDouble(interactionBits.get());
-                    final Sample value = synth(t, signalsAt(t), control);
-                    final short left = (short) (clamp(value.left, -1.0, 1.0) * 32767.0);
-                    final short right = (short) (clamp(value.right, -1.0, 1.0) * 32767.0);
+                    final Signals signals = signalsAt(t);
+                    control += (controlTarget - control) * 0.0012;
+                    final Sample dry = synth(t, signals, control);
+                    final double wetLeft = delayLeft[delayLeftCursor];
+                    final double wetRight = delayRight[delayRightCursor];
+                    final double feedback = 0.16 + signals.release * 0.08 + signals.tension * 0.03;
+                    delayLeft[delayLeftCursor] = Math.tanh(dry.left * 0.24 + wetRight * feedback);
+                    delayRight[delayRightCursor] = Math.tanh(dry.right * 0.24 + wetLeft * feedback);
+                    if (++delayLeftCursor == delayLeft.length) {
+                        delayLeftCursor = 0;
+                    }
+                    if (++delayRightCursor == delayRight.length) {
+                        delayRightCursor = 0;
+                    }
+                    final double space = 0.035 + signals.release * 0.07 + signals.high * 0.015;
+                    double leftValue = dry.left * (1.0 - space * 0.10) + wetLeft * space;
+                    double rightValue = dry.right * (1.0 - space * 0.10) + wetRight * space;
+                    final double peak = Math.max(Math.abs(leftValue), Math.abs(rightValue));
+                    peakEnvelope += (peak - peakEnvelope) * (peak > peakEnvelope ? 0.04 : 0.00010);
+                    final double envelopeLimiter = peakEnvelope > 0.96 ? 0.96 / peakEnvelope : 1.0;
+                    final double instantLimiter = peak > 0.98 ? 0.98 / peak : 1.0;
+                    final double limiter = Math.min(envelopeLimiter, instantLimiter);
+                    final double fadeIn = smoothstep(0.0, 1.8, t);
+                    leftValue *= limiter * 0.92 * fadeIn;
+                    rightValue *= limiter * 0.92 * fadeIn;
+                    final short left = (short) (clamp(leftValue, -1.0, 1.0) * 32767.0);
+                    final short right = (short) (clamp(rightValue, -1.0, 1.0) * 32767.0);
                     buffer[i] = (byte) (left & 0xff);
                     buffer[i + 1] = (byte) ((left >>> 8) & 0xff);
                     buffer[i + 2] = (byte) (right & 0xff);
@@ -1395,121 +1478,76 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
     }
 
     private Sample synth(final double t, final Signals s, final double control) {
-        final int role = musicRole(s.section);
-        final int[] progression = PROGRESSIONS[harmonyVariant];
-        final int phrase = (int) Math.floor((t / beatSeconds) / 8.0);
-        final int chord = progression[Math.floorMod(phrase, progression.length)];
-        final int nextChord = progression[Math.floorMod(phrase + 1, progression.length)];
-        final double phrasePhase = ((t / beatSeconds) / 8.0) - Math.floor((t / beatSeconds) / 8.0);
-        final double chordMorph = smoothstep(0.72, 1.0, phrasePhase);
-        final double sectionRise = smoothstep(0.05, 0.92, s.sectionProgress);
-        final double sectionFall = 1.0 - smoothstep(0.82, 1.0, s.sectionProgress);
-        final double stepEnv = Math.exp(-s.stepPhase * 8.0);
-        final double stepAge = s.stepPhase * beatSeconds * 0.25;
-        final double attack = smoothstep(0.0, 0.08, s.stepPhase);
-        final int grooveStep = (s.step + beatShift) & 15;
-        final double kickHit = hit(kickMask(role), grooveStep);
-        final double kickEnv = kickHit * Math.exp(-s.stepPhase * (5.5 + s.drive * 6.0));
-        final double snareEnv = hit(snareMask(role), grooveStep) * Math.exp(-s.stepPhase * 12.0) * attack;
-        final double hatEnv = hit(hatMask(role), grooveStep) * Math.exp(-s.stepPhase * (14.0 + s.brightness * 8.0)) * attack;
-        final double duck = 1.0 - kickEnv * (0.34 + s.drive * 0.22);
-        final double bassClock = (t / beatSeconds) * 2.0;
-        final int bassIndex = (int) Math.floor(bassClock);
-        final double bassPhase = bassClock - bassIndex;
-        final int bassStep = BASS_PATTERNS[bassVariant][Math.floorMod(bassIndex, 16)];
-        final int nextBassStep = BASS_PATTERNS[bassVariant][Math.floorMod(bassIndex + 1, 16)];
-        final double bassBlend = smoothstep(0.74, 1.0, bassPhase);
-        final int leadStep = LEAD_PATTERNS[leadVariant][Math.floorMod((int) Math.floor((t / beatSeconds) * 4.0), 16)];
+        final double beat = t / beatSeconds;
+        final int beatIndex = (int) Math.floor(beat);
+        final double phraseClock = beat / 8.0;
+        final int phrase = (int) Math.floor(phraseClock);
+        final double phraseMorph = smoothstep(0.80, 1.0, phraseClock - Math.floor(phraseClock));
+        final long segment = (long) s.loop * SECTIONS + s.section;
+        final long nextSegment = segment + 1L;
+        final double musicBlend = s.sectionBlend;
+        final int[] harmonyA = PROGRESSIONS[musicChoice(segment, 0x51A7E11AL, PROGRESSIONS.length)];
+        final int[] harmonyB = PROGRESSIONS[musicChoice(nextSegment, 0x51A7E11AL, PROGRESSIONS.length)];
+        final double chordA = melodicStep(harmonyA, phrase, phraseMorph);
+        final double chordB = melodicStep(harmonyB, phrase, phraseMorph);
+        final double chord = chordA + (chordB - chordA) * musicBlend;
+        final double stepClock = beat * 4.0;
+        final int step = (int) Math.floor(stepClock) & 15;
+        final double stepPhase = stepClock - Math.floor(stepClock);
+        final double stepAge = stepPhase * beatSeconds * 0.25;
+        final double drive = 0.64 + s.drive * 0.22 + s.intensity * 0.08;
+        final double brightness = 0.48 + s.brightness * 0.28 + clamp01(control * 0.03);
 
-        final double padGain = switch (role) {
-            case 0 -> 0.34 + sectionRise * 0.16;
-            case 1 -> 0.24;
-            case 2 -> 0.28 + sectionRise * 0.10;
-            case 3 -> 0.18;
-            case 4 -> 0.31;
-            case 5 -> 0.42 * sectionFall + 0.14;
-            default -> 0.34 + s.release * 0.18;
-        };
-        final double subGain = switch (role) {
-            case 0 -> 0.04 + sectionRise * 0.05;
-            case 1 -> 0.24 + sectionRise * 0.10;
-            case 2 -> 0.32 + sectionRise * 0.18;
-            case 3 -> 0.72 + kickEnv * 0.10;
-            case 4 -> 0.54;
-            case 5 -> 0.16 * sectionFall;
-            default -> 0.48 + sectionRise * 0.14;
-        };
-        final double leadGain = switch (role) {
-            case 0 -> 0.00;
-            case 1 -> 0.03 + sectionRise * 0.04;
-            case 2 -> 0.06 + sectionRise * 0.07;
-            case 3 -> 0.12 + s.groove * 0.08;
-            case 4 -> 0.10 + sectionRise * 0.06;
-            case 5 -> 0.05 * sectionFall;
-            default -> 0.14 + s.release * 0.08;
-        };
-        final double percGain = 0.12 + s.drive * 0.36;
-        final double chordRoot = rootNote + chord + (nextChord - chord) * chordMorph * 0.12;
-        final Sample pad = padCloud(t, chordRoot, s.tension, padGain * duck, 0.42 + s.brightness * 0.28);
-        final double subFreq = note(rootNote - 24 + chord + bassStep);
-        final double nextSubFreq = note(rootNote - 24 + chord + nextBassStep);
-        final double subA = Math.sin(Math.PI * 2.0 * subFreq * t + Math.sin(t * 1.7) * 0.04);
-        final double subB = Math.sin(Math.PI * 2.0 * nextSubFreq * t + Math.sin(t * 1.7) * 0.04);
-        final double sub = (subA + (subB - subA) * bassBlend)
-                * subGain * (0.72 + stepEnv * 0.28) * duck;
-        final double reeseA = softSaw(subFreq * 1.005 * t) - softSaw(subFreq * 0.497 * t + 0.31);
-        final double reeseB = softSaw(nextSubFreq * 1.005 * t) - softSaw(nextSubFreq * 0.497 * t + 0.31);
-        final double reese = (reeseA + (reeseB - reeseA) * bassBlend) * subGain * 0.31 * s.drive * duck;
-        final double kickAge = stepAge;
-        final double kick = kickDrum(kickAge, kickHit, s.drive);
-        final double punch = kick + Math.tanh(kick * 2.8) * 0.28;
-        final double clapNoise = bandNoise(t, 11_000.0, 0.31) * snareEnv * percGain * (0.08 + s.brightness * 0.10);
-        final double snap = Math.sin(Math.PI * 2.0 * 188.0 * stepAge) * snareEnv * percGain * 0.20;
-        final double hats = metallicHat(t, chord) * hatEnv * (0.018 + s.brightness * 0.038 + control * 0.003)
-                + bandNoise(t, 21_000.0, 0.91) * hatEnv * (0.003 + s.brightness * 0.006);
-        final double tick = (hit(hatMask(role), (grooveStep + 2) & 15) * Math.exp(-s.stepPhase * 18.0) * attack)
-                * polishedTone(note(rootNote + chord + 31) * t, s.brightness, 0.20) * s.brightness * 0.014;
-        final double arpPhase = ((t / beatSeconds) * (role == DROP || role == FINALE ? 4.0 : 2.0));
-        final double arpEnv = Math.exp(-(arpPhase - Math.floor(arpPhase)) * (5.0 + s.drive * 3.0));
-        final double arp = polishedTone(note(rootNote + chord + leadStep) * t, s.brightness, 0.52)
-                * arpEnv * leadGain;
-        final double longLeadEnv = smoothstep(0.18, 0.58, s.sectionProgress) * (1.0 - smoothstep(0.90, 1.0, s.sectionProgress));
-        final double lead = Math.sin(Math.PI * 2.0 * note(rootNote + chord + 24 + (leadStep % 12)) * t
-                + Math.sin(t * 0.44) * 0.18) * leadGain * 0.62 * longLeadEnv;
-        final double riser = transitionSweep(t, s, chord) * smoothstep(0.62, 0.98, s.sectionProgress)
-                * (role == BUILD || role == RELEASE ? 0.042 : 0.010);
-        final double shimmer = metallicShimmer(t, chord) * (0.0015 + s.high * 0.004 + control * 0.0015) * (0.35 + s.phrasePulse * 0.65)
-                + Math.sin(Math.PI * 2.0 * note(rootNote + chord + 36) * t) * s.phrasePulse * (0.010 + s.brightness * 0.014);
-        final double dropAir = role == DROP ? (1.0 - smoothstep(0.00, 0.08, s.sectionProgress)) * transitionSweep(t, s, chord) * 0.026 : 0.0;
-        final double releaseTone = role == RELEASE || role == FINALE ? Math.sin(Math.PI * 2.0 * note(rootNote + chord + 31) * t)
-                * s.release * (0.06 + sectionRise * 0.08) : 0.0;
+        final double kickAge = triggerAge(stepClock, 0x1111);
+        final double kick = technoKick(kickAge, drive) + morphVoice(
+                technoKick(triggerAge(stepClock, musicMask(segment, 0x101L, 0x4080, 0x0440, 0x8200, 0x2080)), drive * 0.55),
+                technoKick(triggerAge(stepClock, musicMask(nextSegment, 0x101L, 0x4080, 0x0440, 0x8200, 0x2080)), drive * 0.55),
+                musicBlend) * 0.38;
+        final double clap = technoClap(t, triggerAge(stepClock, 0x1010)) + morphVoice(
+                technoClap(t, triggerAge(stepClock, musicMask(segment, 0x202L, 0x2020, 0x2002, 0x0220, 0x0080))),
+                technoClap(t, triggerAge(stepClock, musicMask(nextSegment, 0x202L, 0x2020, 0x2002, 0x0220, 0x0080))),
+                musicBlend) * 0.30;
+        final double hats = morphVoice(
+                technoHat(t, triggerAge(stepClock, musicMask(segment, 0x303L, 0xAAAA, 0xEEEE, 0xAEEE, 0xFAFA)), brightness),
+                technoHat(t, triggerAge(stepClock, musicMask(nextSegment, 0x303L, 0xAAAA, 0xEEEE, 0xAEEE, 0xFAFA)), brightness),
+                musicBlend) + morphVoice(
+                openHat(t, triggerAge(stepClock, musicMask(segment, 0x404L, 0x0808, 0x0202, 0x2020, 0x8080)), brightness, beatSeconds * 2.0),
+                openHat(t, triggerAge(stepClock, musicMask(nextSegment, 0x404L, 0x0808, 0x0202, 0x2020, 0x8080)), brightness, beatSeconds * 2.0),
+                musicBlend);
+        final double rim = morphVoice(
+                rimShot(t, triggerAge(stepClock, musicMask(segment, 0x505L, 0x8410, 0x4880, 0x1140, 0x8208))),
+                rimShot(t, triggerAge(stepClock, musicMask(nextSegment, 0x505L, 0x8410, 0x4880, 0x1140, 0x8208))),
+                musicBlend);
+        final double duck = 1.0 - Math.exp(-kickAge * 24.0) * 0.58;
+        final double bassEnvelope = smoothstep(0.0, 0.008, stepAge)
+                * Math.exp(-stepAge * (38.0 + drive * 14.0));
+        final int[] bassA = BASS_PATTERNS[musicChoice(segment, 0xB4551234L, BASS_PATTERNS.length)];
+        final int[] bassB = BASS_PATTERNS[musicChoice(nextSegment, 0xB4551234L, BASS_PATTERNS.length)];
+        final double bassFrequencyA = clubBassFrequency(rootNote + chordA + bassA[step]);
+        final double bassFrequencyB = clubBassFrequency(rootNote + chordB + bassB[step]);
+        final double bassGain = bassEnvelope * duck;
+        final double acid = morphVoice(acidTone(bassFrequencyA, stepAge, drive + control * 0.025),
+                acidTone(bassFrequencyB, stepAge, drive + control * 0.025), musicBlend)
+                * bassGain * (0.38 + drive * 0.15);
+        final double sub = morphVoice(Math.sin(Math.PI * bassFrequencyA * stepAge),
+                Math.sin(Math.PI * bassFrequencyB * stepAge), musicBlend) * bassGain * 0.24;
 
-        final double bassBus = Math.tanh((sub + reese) * 1.75) * (0.92 + s.drive * 0.20);
-        final double center = punch + snap + bassBus + arp + lead + releaseTone;
-        final double left = pad.left + center + clapNoise * 0.74 + hats * 0.58 + tick * 0.36 + riser * 0.62 + shimmer * 0.72 + dropAir;
-        final double right = pad.right + center + clapNoise * 0.58 + hats * 0.92 - tick * 0.22 + riser * 0.86 - shimmer * 0.55 + dropAir * 0.82;
-        return new Sample(Math.tanh(left * 1.55), Math.tanh(right * 1.55));
-    }
+        final double stabAgeA = triggerAge(stepClock, musicMask(segment, 0x606L, 0x4244, 0x2442, 0x4488, 0x2224));
+        final double stabAgeB = triggerAge(stepClock, musicMask(nextSegment, 0x606L, 0x4244, 0x2442, 0x4488, 0x2224));
+        final double stabEnvelopeA = smoothstep(0.0, 0.006, stabAgeA) * Math.exp(-stabAgeA * 48.0);
+        final double stabEnvelopeB = smoothstep(0.0, 0.006, stabAgeB) * Math.exp(-stabAgeB * 48.0);
+        final double stabFrequency = audibleFrequency(note(rootNote + chord + 12));
+        final double stab = morphVoice(stabTone(stabFrequency, stabAgeA) * stabEnvelopeA,
+                stabTone(stabFrequency, stabAgeB) * stabEnvelopeB, musicBlend) * 0.095;
+        final double pulseFrequency = audibleFrequency(note(rootNote + chord + 31));
+        final double barAge = s.barPhase * beatSeconds * 4.0;
+        final double pulse = Math.sin(Math.PI * 2.0 * pulseFrequency * barAge)
+                * Math.exp(-barAge * 10.0) * 0.03;
 
-    private Sample padCloud(final double t, final double semitone, final double tension, final double gain, final double brightness) {
-        final int color = tension > 0.62 ? 16 : 15;
-        final double root = chordTone(t, semitone, brightness, 0.34);
-        final double fifth = chordTone(t + 0.013, semitone + 7, brightness, 0.24);
-        final double octave = chordTone(t + 0.021, semitone + 12, brightness, 0.20);
-        final double third = chordTone(t + 0.034, semitone + color, brightness, 0.18);
-        final double ninth = chordTone(t + 0.055, semitone + 26, brightness, 0.10 + tension * 0.04);
-        final double susp = chordTone(t + 0.089, semitone + 22, brightness, tension * 0.10);
-        final double left = (root + fifth * 0.72 + third * 0.66 + ninth * 0.44 + susp * 0.38) * gain;
-        final double right = (root * 0.88 + octave * 0.72 + third * 0.76 + ninth * 0.55 - susp * 0.26) * gain;
-        return new Sample(left, right);
-    }
-
-    private double chordTone(final double t, final double semitone, final double brightness, final double gain) {
-        final double f = note((int) Math.round(semitone));
-        final double slow = 0.72 + 0.28 * Math.sin(t * 0.19 + semitone * 0.11);
-        return (Math.sin(Math.PI * 2.0 * f * t)
-                + Math.sin(Math.PI * 2.0 * f * 0.501 * t + 1.4) * (0.24 + brightness * 0.16)
-                + polishedTone(f * 0.251 * t + 0.17, brightness, 0.28)) * gain * slow;
+        final double center = kick * 0.88 + clap * 0.46 + rim * 0.26 + acid + sub + stab + pulse;
+        final double left = center + hats * 0.38 - rim * 0.08;
+        final double right = center + hats * 0.50 + rim * 0.08;
+        return new Sample(technoLimit(left * 0.86), technoLimit(right * 0.86));
     }
 
     private boolean pressed(final int code) {
@@ -1543,8 +1581,64 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
         // The demo uses physical keys only.
     }
 
-    private static double note(final int semitone) {
+    private static double note(final double semitone) {
         return 440.0 * Math.pow(2.0, (semitone - 69.0) / 12.0);
+    }
+
+    private static double audibleFrequency(final double frequency) {
+        return clamp(frequency, 20.0, 16_000.0);
+    }
+
+    private static double clubBassFrequency(final double semitone) {
+        double frequency = note(semitone);
+        while (frequency < 48.0) {
+            frequency *= 2.0;
+        }
+        while (frequency > 190.0) {
+            frequency *= 0.5;
+        }
+        return frequency;
+    }
+
+    private int musicChoice(final long segment, final long salt, final int choices) {
+        final int start = (int) (hash01(seed ^ salt) * choices);
+        final int stride = 1 + (int) (hash01(seed ^ salt * 0x9E3779B97F4A7C15L) * (choices - 1));
+        return Math.floorMod(start + (int) Math.floorMod(segment, choices) * stride, choices);
+    }
+
+    private int musicMask(final long segment, final long salt, final int a, final int b, final int c, final int d) {
+        return switch (musicChoice(segment, salt, 4)) {
+            case 0 -> a;
+            case 1 -> b;
+            case 2 -> c;
+            default -> d;
+        };
+    }
+
+    private static double melodicStep(final int[] progression, final int phrase, final double morph) {
+        final double current = progression[Math.floorMod(phrase, progression.length)];
+        final double next = progression[Math.floorMod(phrase + 1, progression.length)];
+        return current + (next - current) * morph;
+    }
+
+    private static double morphVoice(final double current, final double next, final double blend) {
+        return current + (next - current) * blend;
+    }
+
+    private static double stabTone(final double frequency, final double age) {
+        return Math.sin(Math.PI * 2.0 * frequency * age)
+                + Math.sin(Math.PI * 2.0 * audibleFrequency(frequency * 1.5) * age) * 0.45
+                + Math.sin(Math.PI * 2.0 * audibleFrequency(frequency * 2.0) * age) * 0.25;
+    }
+
+    private double triggerAge(final double stepClock, final int mask) {
+        final int current = (int) Math.floor(stepClock);
+        for (int offset = 0; offset < 16; offset++) {
+            if (((mask >>> Math.floorMod(current - offset, 16)) & 1) != 0) {
+                return (stepClock - (current - offset)) * beatSeconds * 0.25;
+            }
+        }
+        return beatSeconds * 4.0;
     }
 
     private int visualFamily(final int section) {
@@ -1559,64 +1653,64 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
         return KICK_BANKS[grooveVariant][Math.floorMod(section, SECTIONS)];
     }
 
-    private int snareMask(final int section) {
-        return SNARE_BANKS[grooveVariant][Math.floorMod(section, SECTIONS)];
+    private static double technoKick(final double age, final double drive) {
+        final double frequency = 46.0 + Math.exp(-age * 28.0) * 118.0;
+        final double body = Math.sin(Math.PI * 2.0 * frequency * age) * Math.exp(-age * 8.0);
+        final double thump = Math.sin(Math.PI * 2.0 * 52.0 * age) * Math.exp(-age * 12.0);
+        final double click = Math.sin(Math.PI * 2.0 * 1_800.0 * age) * Math.exp(-age * 90.0);
+        return technoLimit((body * 1.10 + thump * 0.52 + click * 0.08) * drive);
     }
 
-    private int hatMask(final int section) {
-        return HAT_BANKS[grooveVariant][Math.floorMod(section, SECTIONS)];
-    }
-
-    private double metallicHat(final double t, final int chord) {
-        final double base = note(rootNote + chord + 43);
-        return (Math.sin(Math.PI * 2.0 * base * 1.00 * t)
-                + Math.sin(Math.PI * 2.0 * base * 1.41 * t + 0.7) * 0.60
-                + Math.sin(Math.PI * 2.0 * base * 1.73 * t + 1.9) * 0.42) * 0.38;
-    }
-
-    private double metallicShimmer(final double t, final int chord) {
-        final double base = note(rootNote + chord + 36);
-        final double slow = 0.55 + 0.45 * Math.sin(t * 0.23 + harmonyVariant);
-        return (Math.sin(Math.PI * 2.0 * base * t + Math.sin(t * 0.31) * 0.25)
-                + Math.sin(Math.PI * 2.0 * base * 1.498 * t + 1.1) * 0.45
-                + Math.sin(Math.PI * 2.0 * base * 2.004 * t + 2.0) * 0.25) * slow;
-    }
-
-    private double transitionSweep(final double t, final Signals s, final int chord) {
-        final double rise = smoothstep(0.52, 1.0, s.sectionProgress);
-        final double base = note(rootNote + chord + 24) * (1.0 + rise * 2.5);
-        final double tone = Math.sin(Math.PI * 2.0 * base * t + rise * rise * 12.0)
-                + Math.sin(Math.PI * 2.0 * base * 1.507 * t + 0.6) * 0.34;
-        return tone * 0.72 + bandNoise(t, 8_000.0 + rise * 8_000.0, 0.73) * 0.10;
-    }
-
-    private static double kickDrum(final double age, final double hit, final double drive) {
-        if (hit <= 0.0) {
+    private static double technoClap(final double t, final double age) {
+        if (age > 0.36) {
             return 0.0;
         }
-        final double sweep = 42.0 * age + (90.0 + drive * 85.0) * (1.0 - Math.exp(-age * 35.0)) / 35.0;
-        final double body = Math.sin(Math.PI * 2.0 * sweep) * Math.exp(-age * (8.0 + drive * 4.0));
-        final double thump = Math.sin(Math.PI * 2.0 * 48.0 * age) * Math.exp(-age * 13.0);
-        final double click = Math.sin(Math.PI * 2.0 * 1_900.0 * age) * Math.exp(-age * 110.0);
-        return Math.tanh(body * 1.65 + thump * 0.55 + click * 0.16) * hit * (0.62 + drive * 0.46);
+        final double envelope = Math.exp(-age * 18.0) * smoothstep(0.0, 0.018, age);
+        final double burst = 1.0 + Math.exp(-Math.abs(age - 0.035) * 85.0) * 0.42;
+        return cheapNoise(t, 7_200.0, 0.42) * envelope * 0.34 * burst
+                + Math.sin(Math.PI * 2.0 * 190.0 * t) * envelope * 0.10;
     }
 
-    private static double polishedTone(final double phase, final double brightness, final double fold) {
-        final double sine = Math.sin(Math.PI * 2.0 * phase);
-        final double shaped = Math.tanh((softSaw(phase) * brightness + sine * (1.2 - brightness * 0.35)) * (1.0 + fold));
-        return shaped * 0.72 + sine * 0.28;
+    private static double technoHat(final double t, final double age, final double brightness) {
+        final double envelope = Math.exp(-age * (16.0 + brightness * 7.0)) * smoothstep(0.0, 0.025, age);
+        final double metal = Math.sin(Math.PI * 2.0 * 6_200.0 * t)
+                + Math.sin(Math.PI * 2.0 * 8_900.0 * t + 0.4) * 0.55;
+        return (metal * 0.055 + cheapNoise(t, 8_400.0, 0.77) * 0.09) * envelope;
     }
 
-    private static double softSaw(final double phase) {
-        final double p = phase - Math.floor(phase);
-        final double saw = p * 2.0 - 1.0;
-        return Math.tanh(saw * 1.85);
+    private static double openHat(final double t, final double age, final double brightness, final double period) {
+        final double envelope = Math.exp(-age * (4.8 + brightness * 2.5)) * smoothstep(0.0, 0.035, age)
+                * (1.0 - smoothstep(period * 0.88, period, age));
+        final double metal = Math.sin(Math.PI * 2.0 * 7_100.0 * t + 0.2)
+                + Math.sin(Math.PI * 2.0 * 9_600.0 * t + 1.1) * 0.55;
+        return (metal * 0.04 + cheapNoise(t, 10_800.0, 1.17) * 0.08) * envelope;
     }
 
-    private static double bandNoise(final double t, final double rate, final double salt) {
-        final double a = highNoise(Math.floor(t * rate) / rate + salt);
-        final double b = highNoise(Math.floor(t * rate * 0.517) / (rate * 0.517) + salt * 1.73);
-        return (a - b) * 0.5;
+    private static double rimShot(final double t, final double age) {
+        if (age > 0.28) {
+            return 0.0;
+        }
+        final double envelope = Math.exp(-age * 26.0) * smoothstep(0.0, 0.012, age);
+        return (Math.sin(Math.PI * 2.0 * 820.0 * t) * 0.20
+                + cheapNoise(t, 4_600.0, 1.91) * 0.06) * envelope;
+    }
+
+    private static double acidTone(final double frequency, final double age, final double drive) {
+        final double sweep = 1.0 + (1.0 - Math.exp(-age * 35.0)) * (0.55 + drive * 0.45);
+        final double fundamental = audibleFrequency(frequency * sweep);
+        final double tone = Math.sin(Math.PI * 2.0 * fundamental * age)
+                + Math.sin(Math.PI * 2.0 * audibleFrequency(fundamental * 2.0) * age) * 0.30
+                + Math.sin(Math.PI * 2.0 * audibleFrequency(fundamental * 3.0) * age) * 0.14;
+        return Math.tanh(tone * (1.7 + drive));
+    }
+
+    private static double cheapNoise(final double t, final double rate, final double salt) {
+        final double audibleRate = audibleFrequency(rate);
+        return highNoise(Math.floor(t * audibleRate) / audibleRate + salt);
+    }
+
+    private static double technoLimit(final double value) {
+        return Math.tanh(value * 0.78) * 0.95;
     }
 
     private double computeCycleBeats() {
@@ -1633,11 +1727,6 @@ public final class Noxius64kDemo extends Canvas implements Runnable, KeyListener
 
     private static double hit(final int mask, final int step) {
         return ((mask >>> step) & 1) == 1 ? 1.0 : 0.0;
-    }
-
-    private static double tri(final double phase) {
-        final double p = phase - Math.floor(phase);
-        return 4.0 * Math.abs(p - 0.5) - 1.0;
     }
 
     private static double highNoise(final double t) {
